@@ -1,6 +1,15 @@
 """Streamlit web UI for metadata-grabber."""
 
 import os
+import sys
+from pathlib import Path
+
+# Ensure the src/ directory is on the Python path so that
+# metadata_grabber is importable on Streamlit Community Cloud
+# (which doesn't pip-install the package itself).
+_src_dir = str(Path(__file__).resolve().parent.parent)
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 import streamlit as st
 
