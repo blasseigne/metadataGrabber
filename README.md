@@ -168,4 +168,4 @@ pytest tests/ -v -m "not integration"
 
 ## License
 
-This project is provided as-is for research use.
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
