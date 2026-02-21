@@ -1,7 +1,11 @@
 """Fetch metadata for GSE accessions from NCBI GEO via E-utilities."""
 
+import gzip
+import io
 import logging
-from typing import List, Optional
+import re
+from collections import Counter
+from typing import Dict, List, Optional, Set
 
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -15,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 ESUMMARY_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 ELINK_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi"
+GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo/series"
 GEO_UID_OFFSET = 200_000_000
+
+# Keywords for classifying sequencing type from library_source + molecule
+_SINGLE_CELL_KEYWORDS = {"transcriptomic single cell", "single cell"}
+_NUCLEAR_RNA_KEYWORDS = {"nuclear rna"}
 
 
 class GEOFetcher(BaseFetcher):
@@ -87,7 +96,15 @@ class GEOFetcher(BaseFetcher):
             db_refs.append(f"GEO_Platform:GPL{gpl}")
         record.database_references = "; ".join(db_refs)
 
-        # 4. Resolve publications
+        # 4. Fetch sample-level metadata from SOFT format
+        #    (tissue, age, sequencing type)
+        sample_meta = self._fetch_sample_soft(accession)
+        if sample_meta:
+            record.tissue = sample_meta.get("tissue", "")
+            record.age = sample_meta.get("age", "")
+            record.sequencing_type = sample_meta.get("sequencing_type", "")
+
+        # 5. Resolve publications
         pmids = [str(p) for p in doc.get("pubmedids", []) if p]
         elink_pmids = self._fetch_elink_pubmed(uid)
         all_pmids = list(dict.fromkeys(pmids + elink_pmids))
@@ -159,3 +176,148 @@ class GEOFetcher(BaseFetcher):
                 if linksetdb.get("linkname") == "gds_pubmed":
                     pmids.extend(str(lid) for lid in linksetdb.get("links", []))
         return pmids
+
+    # --- Sample-level SOFT parsing for tissue, age, sequencing type ---
+
+    @staticmethod
+    def _build_ftp_url(accession: str) -> str:
+        """Build the GEO FTP URL for the family SOFT file.
+
+        URL pattern:
+          https://ftp.ncbi.nlm.nih.gov/geo/series/GSE{prefix}nnn/GSE{num}/soft/GSE{num}_family.soft.gz
+
+        where {prefix} is the accession number with the last 3 digits replaced by 'nnn'.
+        E.g. GSE261596 → GSE261nnn/GSE261596
+        """
+        num_str = accession[3:]  # strip "GSE"
+        if len(num_str) > 3:
+            prefix = num_str[:-3] + "nnn"
+        else:
+            prefix = "nnn"
+        return f"{GEO_FTP_BASE}/GSE{prefix}/{accession}/soft/{accession}_family.soft.gz"
+
+    def _fetch_sample_soft(self, accession: str) -> Optional[Dict[str, str]]:
+        """Download the compressed SOFT file from GEO FTP and extract
+        tissue, age, and sequencing type (bulk/single cell/single nuclei).
+        Returns aggregated values across samples."""
+        url = self._build_ftp_url(accession)
+        try:
+            self._limiter.acquire()
+            resp = self._session.get(url, timeout=90)
+            resp.raise_for_status()
+        except Exception:
+            logger.warning("SOFT FTP fetch failed for %s", accession, exc_info=True)
+            return None
+
+        # Decompress gzip content
+        try:
+            soft_text = gzip.decompress(resp.content).decode("utf-8", errors="replace")
+        except Exception:
+            logger.warning("Failed to decompress SOFT for %s", accession, exc_info=True)
+            return None
+
+        return self._parse_sample_soft(soft_text)
+
+    @staticmethod
+    def _parse_sample_soft(soft_text: str) -> Dict[str, str]:
+        """Parse SOFT text for all samples and return aggregated metadata."""
+        tissues: List[str] = []
+        ages: List[str] = []
+        library_sources: List[str] = []
+        molecules: List[str] = []
+        source_names: List[str] = []
+
+        for line in soft_text.split("\n"):
+            line = line.strip()
+
+            # Sample characteristics (key: value format)
+            if line.startswith("!Sample_characteristics_ch1"):
+                value = line.split("=", 1)[-1].strip()
+                kv = value.split(":", 1)
+                if len(kv) == 2:
+                    key = kv[0].strip().lower()
+                    val = kv[1].strip()
+                    if key in ("tissue", "tissue type", "organ", "cell type"):
+                        tissues.append(val)
+                    elif key in ("age", "developmental stage", "dev stage"):
+                        ages.append(val)
+
+            elif line.startswith("!Sample_source_name_ch1"):
+                val = line.split("=", 1)[-1].strip()
+                if val:
+                    source_names.append(val)
+
+            elif line.startswith("!Sample_library_source"):
+                val = line.split("=", 1)[-1].strip().lower()
+                if val:
+                    library_sources.append(val)
+
+            elif line.startswith("!Sample_molecule_ch1"):
+                val = line.split("=", 1)[-1].strip().lower()
+                if val:
+                    molecules.append(val)
+
+        result: Dict[str, str] = {}
+
+        # Tissue: use characteristics first, fall back to source_name
+        if tissues:
+            result["tissue"] = _most_common(tissues)
+        elif source_names:
+            result["tissue"] = _most_common(source_names)
+
+        # Age: collect unique values
+        if ages:
+            unique_ages = sorted(set(ages))
+            result["age"] = "; ".join(unique_ages)
+
+        # Sequencing type: classify from library_source + molecule
+        result["sequencing_type"] = _classify_sequencing_type(
+            library_sources, molecules
+        )
+
+        return result
+
+
+def _most_common(values: List[str]) -> str:
+    """Return the most common value, or semicolon-separated unique values
+    if there are multiple distinct values."""
+    counts = Counter(values)
+    unique = sorted(counts.keys())
+    if len(unique) == 1:
+        return unique[0]
+    # Multiple distinct values: return all unique, sorted
+    return "; ".join(unique)
+
+
+def _classify_sequencing_type(
+    library_sources: List[str], molecules: List[str]
+) -> str:
+    """Classify as bulk, single cell, single nuclei, or other
+    based on GEO SOFT library_source and molecule fields."""
+    if not library_sources:
+        return ""
+
+    source_set = set(library_sources)
+    molecule_set = set(molecules)
+
+    # Check for single-cell indicators in library_source
+    is_single_cell = any(
+        kw in src for src in source_set for kw in _SINGLE_CELL_KEYWORDS
+    )
+
+    if is_single_cell:
+        # Distinguish single nuclei vs single cell via molecule
+        is_nuclear = any(
+            kw in mol for mol in molecule_set for kw in _NUCLEAR_RNA_KEYWORDS
+        )
+        if is_nuclear:
+            return "single nuclei"
+        return "single cell"
+
+    # Check for standard transcriptomic/genomic (bulk)
+    if any("transcriptomic" in src for src in source_set):
+        return "bulk"
+    if any("genomic" in src for src in source_set):
+        return "bulk"
+
+    return "other"

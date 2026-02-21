@@ -111,6 +111,10 @@ def ena_run_payload():
             "tax_id": "1280",
             "instrument_platform": "ILLUMINA",
             "library_strategy": "WGS",
+            "library_source": "GENOMIC",
+            "tissue_type": "blood",
+            "age": "8 weeks",
+            "cell_type": "",
         }
     ]
 
@@ -124,3 +128,43 @@ def ena_xref_payload():
             "Source Secondary Accession": "31080781",
         }
     ]
+
+
+@pytest.fixture
+def geo_soft_single_nuclei():
+    """Mock GEO SOFT text for a single-nuclei dataset."""
+    return """\
+^SAMPLE = GSM8147269
+!Sample_title = S4, Hippocampus, wild-type, 12m
+!Sample_characteristics_ch1 = tissue: left hippocampus
+!Sample_characteristics_ch1 = age: 12 months
+!Sample_characteristics_ch1 = Sex: female
+!Sample_source_name_ch1 = left hippocampus
+!Sample_molecule_ch1 = nuclear RNA
+!Sample_library_source = transcriptomic single cell
+!Sample_library_strategy = RNA-Seq
+^SAMPLE = GSM8147270
+!Sample_title = S5, Hippocampus, wild-type, 6m
+!Sample_characteristics_ch1 = tissue: left hippocampus
+!Sample_characteristics_ch1 = age: 6 months
+!Sample_characteristics_ch1 = Sex: female
+!Sample_source_name_ch1 = left hippocampus
+!Sample_molecule_ch1 = nuclear RNA
+!Sample_library_source = transcriptomic single cell
+!Sample_library_strategy = RNA-Seq
+"""
+
+
+@pytest.fixture
+def geo_soft_bulk():
+    """Mock GEO SOFT text for a bulk RNA-seq dataset."""
+    return """\
+^SAMPLE = GSM1234567
+!Sample_title = kidney_wt_rep1
+!Sample_characteristics_ch1 = tissue: kidney
+!Sample_characteristics_ch1 = age: 8 weeks
+!Sample_source_name_ch1 = kidney
+!Sample_molecule_ch1 = polyA RNA
+!Sample_library_source = transcriptomic
+!Sample_library_strategy = RNA-Seq
+"""

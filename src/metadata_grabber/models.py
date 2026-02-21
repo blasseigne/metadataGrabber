@@ -5,6 +5,9 @@ from dataclasses import dataclass
 OUTPUT_COLUMNS = [
     "accession",
     "species",
+    "tissue",
+    "age",
+    "sequencing_type",
     "data_type",
     "platform",
     "date_deposited",
@@ -18,6 +21,9 @@ OUTPUT_COLUMNS = [
 class MetadataRecord:
     accession: str
     species: str = ""
+    tissue: str = ""
+    age: str = ""
+    sequencing_type: str = ""  # bulk, single cell, single nuclei, or other
     data_type: str = ""
     platform: str = ""
     date_deposited: str = ""

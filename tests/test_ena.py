@@ -33,6 +33,10 @@ def test_ena_fetch_success(
     assert "Sanger Institute" in record.experimental_details
     assert "BioProject:PRJEB35921" in record.database_references
     assert record.fetch_status == "success"
+    # New fields
+    assert record.tissue == "blood"
+    assert record.age == "8 weeks"
+    assert record.sequencing_type == "bulk"
 
 
 @responses.activate

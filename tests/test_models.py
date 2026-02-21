@@ -17,4 +17,18 @@ def test_to_dict_excludes_internal_fields():
 def test_default_values():
     rec = MetadataRecord(accession="X")
     assert rec.species == ""
+    assert rec.tissue == ""
+    assert rec.age == ""
+    assert rec.sequencing_type == ""
     assert rec.fetch_status == "success"
+
+
+def test_new_fields_in_output():
+    rec = MetadataRecord(accession="X", tissue="kidney", age="8 weeks", sequencing_type="bulk")
+    d = rec.to_dict()
+    assert d["tissue"] == "kidney"
+    assert d["age"] == "8 weeks"
+    assert d["sequencing_type"] == "bulk"
+    assert "tissue" in OUTPUT_COLUMNS
+    assert "age" in OUTPUT_COLUMNS
+    assert "sequencing_type" in OUTPUT_COLUMNS

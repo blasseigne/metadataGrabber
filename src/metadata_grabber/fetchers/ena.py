@@ -57,13 +57,18 @@ class ENAFetcher(BaseFetcher):
         # Study-level species (often blank — will override from run level)
         record.species = study.get("scientific_name", "")
 
-        # 2. Run-level metadata (species, platform, library strategy)
+        # 2. Run-level metadata (species, platform, library strategy, tissue, age)
         run = self._fetch_run_metadata(accession)
         if run:
             if run.get("scientific_name"):
                 record.species = run["scientific_name"]
             record.platform = run.get("instrument_platform", "")
             record.data_type = run.get("library_strategy", "")
+            record.tissue = run.get("tissue_type", "")
+            record.age = run.get("age", "")
+            record.sequencing_type = _classify_library_source(
+                run.get("library_source", "")
+            )
 
         # 3. Database references
         db_refs = []
@@ -140,12 +145,15 @@ class ENAFetcher(BaseFetcher):
         return None
 
     def _fetch_run_metadata(self, accession: str) -> Optional[dict]:
-        """Query read_study for species/platform (study-level often lacks these)."""
+        """Query read_study for species/platform/tissue/age (study-level often lacks these)."""
         params = {
             "result": "read_study",
             "query": f'secondary_study_accession="{accession}"',
             "format": "json",
-            "fields": "scientific_name,tax_id,instrument_platform,library_strategy",
+            "fields": (
+                "scientific_name,tax_id,instrument_platform,library_strategy,"
+                "library_source,tissue_type,age,cell_type"
+            ),
             "limit": "5",
         }
         resp = self._http_get(PORTAL_API_URL, params)
@@ -157,7 +165,10 @@ class ENAFetcher(BaseFetcher):
 
         # Take most common value for each field across runs
         result = {}
-        for field in ("scientific_name", "instrument_platform", "library_strategy"):
+        for field in (
+            "scientific_name", "instrument_platform", "library_strategy",
+            "library_source", "tissue_type", "age", "cell_type",
+        ):
             values = [row.get(field, "") for row in data if row.get(field)]
             if values:
                 result[field] = Counter(values).most_common(1)[0][0]
@@ -211,3 +222,15 @@ class ENAFetcher(BaseFetcher):
                         parts.append(f"PMID:{pmid}")
                     citations.append(". ".join(p for p in parts if p))
         return citations
+
+
+def _classify_library_source(library_source: str) -> str:
+    """Classify sequencing type from ENA library_source field."""
+    if not library_source:
+        return ""
+    src = library_source.lower()
+    if "single cell" in src:
+        return "single cell"
+    if "transcriptomic" in src or "genomic" in src:
+        return "bulk"
+    return "other"
